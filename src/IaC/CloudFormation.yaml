@@ -1,0 +1,480 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to launch JARVIS
+
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: jarvis-transcriptions
+      OwnershipControls:
+        Rules: 
+          - ObjectOwnership: ObjectWriter
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      LifecycleConfiguration:
+        Rules:
+          - Id: 'TemporaryFilesLifecycleRule'
+            Status: 'Enabled'
+            ExpirationInDays: 1
+  
+  transcribeAudioQuery:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: transcribeAudioQuery
+      Handler: index.handler
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Runtime: nodejs20.x
+      Code:
+        ZipFile: |
+          import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+          import { TranscribeClient, StartTranscriptionJobCommand } from '@aws-sdk/client-transcribe';
+
+          const s3Client = new S3Client({ region: 'us-east-1' });
+          const transcribeClient = new TranscribeClient({ region: 'us-east-1' });
+
+          export const handler = async (event) => {
+            const bucketName = 'jarvis-transcriptions';
+            const fileName = 'jarvis-transcription-file' + Date.now();
+            const jobName = 'jarvis-transcription' + Date.now();
+            const { fileContent } = JSON.parse(event.body);
+            const fileCont = Buffer.from(fileContent, 'base64');
+
+            try {
+              await uploadAudioFileToS3(bucketName, fileName, fileCont);
+              await startTranscription(bucketName, fileName, jobName);
+
+              return {
+                statusCode: 200,
+                headers: {
+                  'Access-Control-Allow-Headers': 'Content-Type',
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Methods': 'OPTIONS,POST',
+                },
+                body: JSON.stringify({ message: 'Transcription job started', jobName }),
+              };
+            } catch (error) {
+              console.error('Error occurred:', error);
+              return {
+                statusCode: 500,
+                headers: {
+                  'Access-Control-Allow-Headers': 'Content-Type',
+                  'Access-Control-Allow-Origin': '*',
+                  'Access-Control-Allow-Methods': 'OPTIONS,POST',
+                },
+                body: JSON.stringify({ error: error.message }),
+              };
+            }
+          };
+
+          const uploadAudioFileToS3 = async (bucketName, fileName, fileContent) => {
+            const params = {
+              Bucket: bucketName,
+              Key: fileName,
+              Body: fileContent,
+            };
+
+            const command = new PutObjectCommand(params);
+            return s3Client.send(command);
+          };
+
+          const startTranscription = (bucketName, fileName, jobName) => {
+            const params = {
+              TranscriptionJobName: jobName,
+              LanguageCode: 'en-US',
+              Media: {
+                MediaFileUri: `s3://${bucketName}/${fileName}`,
+              },
+              OutputBucketName: bucketName,
+            };
+
+            const command = new StartTranscriptionJobCommand(params);
+            return transcribeClient.send(command);
+          };
+
+
+
+
+  getTranscriptionResult:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: getTranscriptionResult
+      Handler: index.handler
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Runtime: nodejs20.x
+      Code:
+        ZipFile: |
+          import { TranscribeClient, GetTranscriptionJobCommand } from "@aws-sdk/client-transcribe";
+          import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+
+          const transcribeClient = new TranscribeClient();
+          const s3Client = new S3Client();
+
+          export const handler = async (event) => {
+              const jobName = event.queryStringParameters.jobName;
+
+              try {
+                  const job = await getTranscriptionResult(jobName);
+
+                  if (job.TranscriptionJob.TranscriptionJobStatus === 'COMPLETED') {
+                      const transcriptFileUri = job.TranscriptionJob.Transcript.TranscriptFileUri;
+                      const transcriptContent = await getTranscriptContent(transcriptFileUri);
+
+                      return {
+                          statusCode: 200,
+                          headers: {
+                              "Access-Control-Allow-Headers": "Content-Type",
+                              "Access-Control-Allow-Origin": "*",
+                              "Access-Control-Allow-Methods": "OPTIONS,POST,GET"
+                          },
+                          body: JSON.stringify({
+                              jobStatus: 'COMPLETED',
+                              transcript: transcriptContent
+                          })
+                      };
+                  } else {
+                      return {
+                          statusCode: 200,
+                          headers: {
+                              "Access-Control-Allow-Headers": "Content-Type",
+                              "Access-Control-Allow-Origin": "*",
+                              "Access-Control-Allow-Methods": "OPTIONS,POST,GET"
+                          },
+                          body: JSON.stringify({
+                              jobStatus: 'IN_PROGRESS'
+                          })
+                      };
+                  }
+              } catch (error) {
+                  console.error("Error: ", error);
+                  return {
+                      statusCode: 500,
+                      headers: {
+                          "Access-Control-Allow-Headers": "Content-Type",
+                          "Access-Control-Allow-Origin": "*",
+                          "Access-Control-Allow-Methods": "OPTIONS,POST,GET"
+                      },
+                      body: JSON.stringify({ error: error.message })
+                  };
+              }
+          };
+
+          const getTranscriptionResult = async (jobName) => {
+              const params = {
+                  TranscriptionJobName: jobName,
+              };
+              const command = new GetTranscriptionJobCommand(params);
+              return transcribeClient.send(command);
+          };
+
+          const getTranscriptContent = async (transcriptFileUri) => {
+              const url = new URL(transcriptFileUri);
+              
+              
+              const urlArray = url.pathname.split("/");
+              const bucketName = urlArray[1];
+              const key = urlArray[2];
+
+              console.log("url:"+url+", bucketName:"+bucketName+",key:"+key);
+              const params = {
+                  Bucket: bucketName,
+                  Key: key
+              };
+              
+              const command = new GetObjectCommand(params);
+              const response = await s3Client.send(command);
+
+              const stream = response.Body;
+              const chunks = [];
+              for await (const chunk of stream) {
+                  chunks.push(chunk);
+              }
+              const body = Buffer.concat(chunks).toString('utf-8');
+              const transcriptData = JSON.parse(body);
+
+              return transcriptData;
+          };
+
+  synthesizeSpeech:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: synthesizeSpeech
+      Handler: index.handler
+      Role: !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
+      Runtime: nodejs20.x
+      Code:
+        ZipFile: |
+          import { PollyClient, SynthesizeSpeechCommand } from "@aws-sdk/client-polly";
+
+          const pollyClient = new PollyClient({ region: "us-east-1" });
+
+          export const handler = async (event) => {
+            try {
+              const {text} = JSON.parse(event.body);
+              const textMsg = text || "Hello, this is a test message from AWS Polly.";
+
+              const params = {
+                Text: textMsg,
+                OutputFormat: "mp3",
+                VoiceId: "Joanna",
+              };
+
+              const command = new SynthesizeSpeechCommand(params);
+              const response = await pollyClient.send(command);
+
+              const audioStream = response.AudioStream;
+              let audioChunks = [];
+              for await (const chunk of audioStream) {
+                audioChunks.push(chunk);
+              }
+              const audioBuffer = Buffer.concat(audioChunks);
+              const base64Audio = audioBuffer.toString("base64");;
+
+              return {
+                statusCode: 200,
+                headers: {
+                  "Access-Control-Allow-Headers": "Content-Type",
+                  "Access-Control-Allow-Origin": "*",
+                  "Access-Control-Allow-Methods": "OPTIONS,POST",
+                },
+                body: JSON.stringify({
+                  message: "Speech synthesis successful.",
+                  audio: base64Audio,
+                }),
+              };
+            } catch (error) {
+              console.error("Error while synthesizing speech:", error);
+              return {
+                statusCode: 500,
+                headers: {
+                  "Access-Control-Allow-Headers": "Content-Type",
+                  "Access-Control-Allow-Origin": "*",
+                  "Access-Control-Allow-Methods": "OPTIONS,POST",
+                },
+                body: JSON.stringify({
+                  message: "Error while synthesizing speech.",
+                  error: error.message,
+                }),
+              };
+            }
+          };
+
+
+  APIGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: Jarvis
+      Description: API Gateway for Jarvis API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  TranscriptionResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt APIGateway.RootResourceId
+      PathPart: transcribe
+      RestApiId: !Ref APIGateway
+  
+  GetTranscriptionResultResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt APIGateway.RootResourceId
+      PathPart: getTransriptionResult
+      RestApiId: !Ref APIGateway
+  
+  SynthesizeSpeechResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt APIGateway.RootResourceId
+      PathPart: synthesize
+      RestApiId: !Ref APIGateway
+
+  TranscribeOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      ResourceId: !Ref TranscriptionResource
+      RestApiId: !Ref APIGateway
+      Integration:
+        Type: MOCK
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: "Empty"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  TranscribeMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref TranscriptionResource
+      RestApiId: !Ref APIGateway
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${transcribeAudioQuery.Arn}/invocations
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: "Empty"
+          ResponseParameters:
+            "method.response.header.Access-Control-Allow-Headers": true
+            "method.response.header.Access-Control-Allow-Methods": true
+            "method.response.header.Access-Control-Allow-Origin": true
+
+  GetTranscriptionResultOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      ResourceId: !Ref GetTranscriptionResultResource
+      RestApiId: !Ref APIGateway
+      Integration:
+        Type: MOCK
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: "Empty"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  GetTranscriptionResultMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: GET
+      ResourceId: !Ref GetTranscriptionResultResource
+      RestApiId: !Ref APIGateway
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${getTranscriptionResult.Arn}/invocations
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: "Empty"
+          ResponseParameters:
+            "method.response.header.Access-Control-Allow-Headers": true
+            "method.response.header.Access-Control-Allow-Methods": true
+            "method.response.header.Access-Control-Allow-Origin": true
+
+
+  SynthesizeSpeechOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: OPTIONS
+      ResourceId: !Ref SynthesizeSpeechResource
+      RestApiId: !Ref APIGateway
+      Integration:
+        Type: MOCK
+        PassthroughBehavior: WHEN_NO_MATCH
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: "Empty"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  SynthesizeSpeechMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: POST
+      ResourceId: !Ref SynthesizeSpeechResource
+      RestApiId: !Ref APIGateway
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${synthesizeSpeech.Arn}/invocations
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: "Empty"
+          ResponseParameters:
+            "method.response.header.Access-Control-Allow-Headers": true
+            "method.response.header.Access-Control-Allow-Methods": true
+            "method.response.header.Access-Control-Allow-Origin": true
+
+  #Lambda permissions
+  TranscriptionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt transcribeAudioQuery.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${APIGateway}/*/*/*
+
+  GetTranscriptionResultPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt getTranscriptionResult.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${APIGateway}/*/*/*
+
+  SynthesizeSpeechPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt synthesizeSpeech.Arn
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${APIGateway}/*/*/*
+
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref APIGateway
+      StageName: prod
+    DependsOn:
+      - TranscribeOptionsMethod
+      - TranscribeMethod
+      - GetTranscriptionResultOptionsMethod
+      - GetTranscriptionResultMethod
+      - SynthesizeSpeechOptionsMethod
+      - SynthesizeSpeechMethod
+

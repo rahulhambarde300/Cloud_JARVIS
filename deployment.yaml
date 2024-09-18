@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jarvis-frontend-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: jarvis-frontend
+  template:
+    metadata:
+      labels:
+        app: jarvis-frontend
+    spec:
+      containers:
+      - name: jarvis-frontend
+        image: rahulhambarde300/jarvis-frontend
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jarvis-frontend-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: jarvis-frontend
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80

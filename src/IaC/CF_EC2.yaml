@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to launch JARVIS EC2
+
+Resources:
+  JarvisEC2Instance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: 't2.micro'
+      ImageId: 'ami-0ba9883b710b05ac6'
+      KeyName: 'jarvis-key -pair'
+      SecurityGroupIds:
+        - !Ref JarvisSecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          sudo yum update -y
+
+          sudo yum install docker -y
+          sudo systemctl start docker
+          sudo systemctl enable docker
+          
+          sudo docker pull rahulh300/aws-jarvis:latest
+
+          sudo docker run -d -p 8080:8080 rahulh300/aws-jarvis:latest
+
+          sudo yum install -y nginx
+          
+          sudo mkdir -p /etc/ssl/private /etc/ssl/certs
+
+          # Generate a self-signed SSL certificate
+          sudo openssl req -newkey rsa:2048 -nodes -keyout /etc/ssl/private/server.key -x509 -days 365 -out /etc/ssl/certs/server.crt -subj "/C=US/ST=State/L=City/O=Company/OU=Department/CN=localhost"
+
+          sudo bash -c 'cat > /etc/nginx/conf.d/myapp.conf <<EOF
+          server {
+              listen 80;
+              server_name localhost;
+
+              location / {
+                  return 301 https://\$host\$request_uri;
+              }
+          }
+
+          server {
+              listen 443 ssl;
+              server_name localhost;
+
+              ssl_certificate /etc/ssl/certs/server.crt;
+              ssl_certificate_key /etc/ssl/private/server.key;
+
+              location / {
+                  proxy_pass http://localhost:8080;
+                  proxy_set_header Host \$host;
+                  proxy_set_header X-Real-IP \$remote_addr;
+                  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto \$scheme;
+              }
+          }
+          EOF'
+          sudo systemctl start nginx
+          sudo systemctl enable nginx
+
+      Tags:
+        - Key: Name
+          Value: JarvisAppEC2Instance
+
+  JarvisSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Allow HTTP (80) and SSH (22) access'
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: 'tcp'
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: '0.0.0.0/0'
+        - IpProtocol: 'tcp'
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: '0.0.0.0/0'
+        
+  
+Outputs:
+  InstanceId:
+    Description: 'Instance ID of the launched EC2 instance'
+    Value: !Ref JarvisEC2Instance
+  PublicIP:
+    Description: 'Public IP address of the launched EC2 instance'
+    Value: !GetAtt JarvisEC2Instance.PublicIp

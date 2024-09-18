@@ -1,0 +1,1 @@
+export const COHERE_API_URL = 'https://api.cohere.ai/v1/generate';
