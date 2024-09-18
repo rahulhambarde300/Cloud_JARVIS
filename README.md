@@ -12,27 +12,21 @@ Performance and Response Times
 The frontend application is optimized for performance and operates efficiently as it is deployed in a production environment on an EC2 instance [3]. The Cohere API [2] provides rapid responses within milliseconds, and AWS Polly [4] generates and returns audio responses within seconds.
 Current Limitations
 A notable limitation of the current architecture is the use of AWS Transcribe [5]. The transcription process can be time-consuming, leading to delays while the frontend application polls for transcription results via a Lambda [6] function. This latency affects the overall user experience.
-Services
-I have utilized following services in my project:
-1.	Amazon EC2 [3]
-2.	AWS Lambda [6]
-3.	Amazon S3 [7]
-4.	Amazon API gateway [8]
-5.	Amazon Transcribe [5]
-6.	Amazon Polly [4]
 
-## Amazon EC2
-Amazon EC2 (Elastic Compute Cloud) [3] is employed to deploy the React application. Alternative services that could be used include Amazon EBS (Elastic Beanstalk) [9], Amazon ECS (Elastic Container Service) [10], or Amazon EKS (Elastic Kubernetes Service) [11]. These services are compatible with the project's architecture since a Docker image is created for the frontend.
-## AWS Lambda
-AWS Lambda [6] is utilized to provide compute functionality with minimal latency, enabling a serverless architecture. There is no serverless alternative to this.
-## Amazon S3
-The application requires storage for MP3 files and transcripts (in JSON format), which are saved as objects in an Amazon S3 [7] bucket. Alternative storage solutions like Amazon DynamoDB [12] or Amazon RDS [13] are not suitable for these types of objects.
-## Amazon API Gateway
-Given the application involves multiple Lambda [6] functions, managing individual URLs for each function would be complex. Amazon API Gateway [8] simplifies URL management by binding multiple Lambda functions to a single API Gateway [8] endpoint. This also creates an abstraction layer between the frontend and backend, hiding the origin of the requested resources. Hence, API Gateway [8] is the most suitable choice for this use case.
-## Amazon Transcribe
-To enable user interaction with a large language model (LLM), Amazon Transcribe [5] is essential for converting user speech into text. This service is critical for understanding user input and integrating with the LLM. There is no direct alternative within AWS for this functionality, with the only other option being the Web Audio API [14] integrated directly in browsers. I believe Web Audio API [14] is much more suitable for this use case as it is faster.
-## Amazon Polly
-Amazon Polly [4] is the second most important service in the architecture, providing text-to-speech capabilities that allow users to hear responses from the LLM. Like Transcribe [5], there is no direct alternative within AWS for this service.
+## Final architecture
+Below figure shows the final architecture of my application.
+![Architecture](./AWS_Jarvis_updated.png)
+
+
+## Services
+I have utilized following services in my project:
+1.  Cohere API [2]
+2.	Amazon EC2 [3]
+3.	AWS Lambda [6]
+4.	Amazon S3 [7]
+5.	Amazon API gateway [8]
+6.	Amazon Transcribe [5]
+7.	Amazon Polly [4]
 
 # Deployment Model
 The chosen deployment model for the project is the public cloud [15], specifically utilizing Amazon Web Services (AWS). This decision was made for several reasons:
@@ -45,11 +39,6 @@ The chosen delivery model for the project is Software as a Service (SaaS) [16]. 
 1.	Accessibility and Convenience: SaaS applications are accessible over the internet, allowing users to access the service from any device with a web browser. As this eliminates the need for local installations or complex configurations users can conveniently access the chatbot.
 2.	Scalability and Flexibility: SaaS solutions are designed to scale easily, accommodating varying numbers of users and workloads. This flexibility allows the application to handle increased demand without requiring significant changes to the underlying infrastructure.
 3.	Integration Capabilities: SaaS applications can be designed to integrate easily with other cloud-based services and APIs. This capability facilitates the incorporation of additional features and functionalities, such as AI and machine learning services.
-
-
-## Final architecture
-Below figure shows the final architecture of my application.
-![Architecture](./AWS_Jarvis_updated.png)
 
 ## Component Structure
 1. Frontend Deployment:
